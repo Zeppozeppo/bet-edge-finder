@@ -1,13 +1,13 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
-import { RefreshCw, TrendingUp, TrendingDown, Wallet, Zap, Target, AlertTriangle, RotateCcw, FlaskConical, Settings, Bolt, X } from 'lucide-react'
+import { RefreshCw, TrendingUp, TrendingDown, Wallet, Zap, Target, AlertTriangle, RotateCcw, FlaskConical, Settings, Bolt, X, EyeOff, Trash2 } from 'lucide-react'
 import {
   fetchAllGames, fetchAllRecommendations, americanToDecimal,
   fetchFastLiveScores_ApiFootball, fetchFastLiveScores_FootballData,
@@ -47,7 +47,7 @@ interface SimResult {
 }
 
 const DEFAULT_BANKROLL = 150
-const APP_VERSION = '1.5.0'
+const APP_VERSION = '1.6.0'
 
 // Load from localStorage
 function loadState<T>(key: string, fallback: T): T {
@@ -107,6 +107,8 @@ export default function Home() {
   const [bet365Key, setBet365Key] = useState('')
   const [fastScores, setFastScores] = useState<FastLiveScore[]>([])
   const [fetchingFast, setFetchingFast] = useState(false)
+  // hiddenGameIds: partite già gestite (giocate/fatte sparire) - persiste nel reset
+  const [hiddenGameIds, setHiddenGameIds] = useState<Set<string>>(new Set())
 
   // Pull-to-refresh state
   const [pullDistance, setPullDistance] = useState(0)
@@ -123,6 +125,7 @@ export default function Home() {
     const savedRapidKey = loadState<string>('bef-rapidapi-key', '')
     const savedFdToken = loadState<string>('bef-footballdata-token', '')
     const savedBet365Key = loadState<string>('bef-bet365-key', '')
+    const savedHiddenIds = loadState<string[]>('bef-hidden-game-ids', [])
     const migratedBets = savedBets.map(b => ({
       ...b,
       gameId: b.gameId || '',
@@ -140,6 +143,13 @@ export default function Home() {
     setRapidApiKey(savedRapidKey)
     setFootballDataToken(savedFdToken)
     setBet365Key(savedBet365Key)
+    // MIGRAZIONE: aggiungi gameId delle scommesse esistenti (won/lost) ai nascosti
+    const betGameIds = migratedBets
+      .filter(b => b.betType === 'played' || b.result === 'won' || b.result === 'lost')
+      .map(b => String(b.gameId))
+      .filter(id => id && id !== '')
+    const mergedHidden = new Set([...savedHiddenIds, ...betGameIds])
+    setHiddenGameIds(mergedHidden)
     setMounted(true)
   }, [])
 
@@ -149,6 +159,7 @@ export default function Home() {
   useEffect(() => { if (mounted) saveState('bef-rapidapi-key', rapidApiKey) }, [rapidApiKey, mounted])
   useEffect(() => { if (mounted) saveState('bef-footballdata-token', footballDataToken) }, [footballDataToken, mounted])
   useEffect(() => { if (mounted) saveState('bef-bet365-key', bet365Key) }, [bet365Key, mounted])
+  useEffect(() => { if (mounted) saveState('bef-hidden-game-ids', Array.from(hiddenGameIds)) }, [hiddenGameIds, mounted])
 
   const fetchGames = useCallback(async () => {
     setLoading(true)
@@ -266,6 +277,9 @@ export default function Home() {
       : bets.some(b => matchBet(b) && b.betType === type)
     if (alreadyBet) return
 
+    // Aggiungi ai giochi nascosti (persiste nel reset!)
+    setHiddenGameIds(prev => new Set(prev).add(String(rec.game.id)))
+
     const quota = rec.pickType === 'UNDER' && rec.odds.underOdds
       ? americanToDecimal(rec.odds.underOdds)
       : rec.pickType === 'OVER' && rec.odds.overOdds
@@ -317,7 +331,9 @@ export default function Home() {
     setBets([])
     setSimResults({})
     setShowResetConfirm(false)
-    // Re-fetch consigli per pulire partite finite
+    // Pulisci subito i consigli vecchi (evita flickering)
+    setRecommendations([])
+    // Re-fetch consigli - hiddenGameIds NON viene cancellato!
     fetchRecs()
   }
 
@@ -327,6 +343,11 @@ export default function Home() {
       setBankroll(prev => prev + bet.stake) // Ritorna i soldi solo se era GIOCA
     }
     setBets(prev => prev.filter(b => b.id !== id))
+  }
+
+  // Nascondi un consiglio (persiste nel reset!)
+  const dismissRecommendation = (gameId: string) => {
+    setHiddenGameIds(prev => new Set(prev).add(String(gameId)))
   }
 
   // Simulazione automatica (bottone SIMULA in alto per controllare i risultati live)
@@ -503,11 +524,12 @@ export default function Home() {
   // 1) già giocati con GIOCA (qualsiasi risultato)
   // 2) scommessa già archiviata (won/lost) anche da SIMULA
   // 3) partita chiaramente FINITA (status Final/FT/AET o fastScore isFinished)
+  // 4) partita già nascosta dall'utente (hiddenGameIds persiste nel reset!)
   // Usa String() per evitare bug tipo (number !== string) e fallback su nomi squadre
   const isGameFinished = (rec: Recommendation): boolean => {
     // Controlla lo status del gioco stesso
     const status = rec.game.status?.toLowerCase() || ''
-    if (status.includes('final') || status.includes('ft') || status.includes('aet') || status.includes('pen') || status.includes('finished') || status.includes('postponed') || status.includes('cancel') || status.includes('awd')) return true
+    if (status.includes('final') || status.includes('ft') || status.includes('aet') || status.includes('pen') || status.includes('finished') || status.includes('postponed') || status.includes('cancel') || status.includes('awd') || status.includes('suspended') || status.includes('full time') || status.includes('game ended') || status.includes('ended')) return true
     // Controlla nei fastScores se la partita è finita
     const fastMatch = fastScores.find(fs => {
       if (fs.sport !== rec.game.sport) return false
@@ -517,9 +539,11 @@ export default function Home() {
     return false
   }
 
-  const visibleRecommendations = recommendations.filter(rec => {
+  const visibleRecommendations = useMemo(() => recommendations.filter(rec => {
     // Partita finita = non mostrare mai
     if (isGameFinished(rec)) return false
+    // Partita nascosta (giocata in precedenza, persiste nel reset!)
+    if (hiddenGameIds.has(String(rec.game.id))) return false
     // Già giocata con GIOCA o archiviata
     const hasBet = bets.some(b => {
       const idMatch = String(b.gameId) === String(rec.game.id)
@@ -527,7 +551,7 @@ export default function Home() {
       return (idMatch || teamMatch) && b.pickType === rec.pickType && (b.betType === 'played' || b.result === 'won' || b.result === 'lost')
     })
     return !hasBet
-  })
+  }), [recommendations, hiddenGameIds, bets, fastScores])
 
   if (!mounted) {
     return (
@@ -662,6 +686,7 @@ export default function Home() {
                             <div className="flex gap-1 mt-2 justify-end">
                               <Button size="sm" className="h-7 bg-emerald-500 hover:bg-emerald-600 text-black font-bold text-[11px] px-3" onClick={() => addBet(rec, false)}>GIOCA</Button>
                               <Button size="sm" className="h-7 bg-amber-500 hover:bg-amber-600 text-black font-bold text-[11px] px-3" onClick={() => addBet(rec, true)}>SIMULA</Button>
+                              <Button size="sm" className="h-7 w-7 p-0 bg-white/5 hover:bg-red-500/20 text-gray-400 hover:text-red-400" title="Nascondi questo consiglio" onClick={() => dismissRecommendation(rec.game.id)}><EyeOff className="w-3 h-3" /></Button>
                             </div>
                           </div>
                         </div>
@@ -814,6 +839,20 @@ export default function Home() {
                     placeholder="Inserisci Football-Data Token..."
                     className="w-full bg-white/5 border border-white/10 rounded px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
                   />
+                </div>
+
+                <div className="pt-2 border-t border-white/10">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-[10px] text-gray-400">Partite nascoste: {hiddenGameIds.size}</p>
+                      <p className="text-[9px] text-gray-500">Le partite giocate/nascoste non riappaiono dopo il reset</p>
+                    </div>
+                    {hiddenGameIds.size > 0 && (
+                      <Button size="sm" className="h-6 px-2 bg-red-500/20 hover:bg-red-500/30 text-red-400 text-[9px] font-bold border border-red-500/30" onClick={() => { setHiddenGameIds(new Set()); fetchRecs() }}>
+                        <Trash2 className="w-2.5 h-2.5 mr-1" /> Pulisci
+                      </Button>
+                    )}
+                  </div>
                 </div>
 
                 <div className="pt-2 border-t border-white/10">
