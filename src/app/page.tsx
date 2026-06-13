@@ -205,8 +205,18 @@ export default function Home() {
     if (!mounted) return
     fetchGames()
     fetchRecs()
+    // Auto-settle: controlla risultati delle scommesse pending al caricamento
+    if (bets.some(b => b.result === 'pending')) {
+      simulateBets()
+    }
     const interval = setInterval(() => { fetchGames(); fetchRecs() }, 30000)
-    return () => clearInterval(interval)
+    // Auto-settle ogni 2 minuti per scommesse pending
+    const settleInterval = setInterval(() => {
+      if (bets.some(b => b.result === 'pending')) {
+        simulateBets()
+      }
+    }, 120000)
+    return () => { clearInterval(interval); clearInterval(settleInterval) }
   }, [fetchGames, fetchRecs, mounted])
 
   // Pull-to-refresh handlers
@@ -357,7 +367,47 @@ export default function Home() {
       }
     }
 
-    const unresolvedBets = pending.filter(b => !results[b.id])
+    // Funzione helper: processa scoreboard ESPN e aggiorna results
+    const processEspnScoreboard = (data: any, betList: BetRecord[], resultsRef: Record<string, SimResult>) => {
+      const scoreMap: Record<string, { homeScore: number; awayScore: number; status: string; statusCode: string; isFinished: boolean; isLive: boolean }> = {}
+      for (const ev of data.events || []) {
+        const comps = ev.competitions?.[0]; if (!comps) continue
+        const competitors = comps.competitors || []; if (competitors.length < 2) continue
+        const home = competitors.find((c: { homeAway: string }) => c.homeAway === 'home') || competitors[0]
+        const away = competitors.find((c: { homeAway: string }) => c.homeAway === 'away') || competitors[1]
+        const status = ev.status?.type?.shortDetail || ''
+        const statusCode = ev.status?.type?.name || ''
+        const isFinished = status.includes('FT') || status.includes('Final') || statusCode === 'STATUS_FINAL'
+        const isUpcoming = status.includes('Scheduled') || status === "0'" || status === 'TBD' || statusCode === 'STATUS_SCHEDULED'
+        const isLive = !isFinished && !isUpcoming
+        scoreMap[ev.id] = { homeScore: parseInt(home.score || '0'), awayScore: parseInt(away.score || '0'), status, statusCode, isFinished, isLive }
+      }
+
+      for (const bet of betList) {
+        if (resultsRef[bet.id]) continue // già risolta
+        const score = scoreMap[bet.gameId]
+        if (!score) continue
+        const totalPoints = score.homeScore + score.awayScore
+        let wouldWin: boolean | null = null; let reason = ''
+
+        if (bet.pickType === 'OVER' && bet.overUnder) {
+          if (score.isFinished) { wouldWin = totalPoints > bet.overUnder; reason = wouldWin ? `${totalPoints} > ${bet.overUnder} → OVER VINCE ✓` : `${totalPoints} ≤ ${bet.overUnder} → OVER PERDE ✗` }
+          else if (score.isLive) { wouldWin = totalPoints > bet.overUnder; reason = `${totalPoints} vs linea ${bet.overUnder} (LIVE) ${wouldWin ? '→ Sopra ✓' : '→ Sotto ✗'}` }
+          else { wouldWin = null; reason = `Non iniziata (${score.status})` }
+        } else if (bet.pickType === 'UNDER' && bet.overUnder) {
+          if (score.isFinished) { wouldWin = totalPoints < bet.overUnder; reason = wouldWin ? `${totalPoints} < ${bet.overUnder} → UNDER VINCE ✓` : `${totalPoints} ≥ ${bet.overUnder} → UNDER PERDE ✗` }
+          else if (score.isLive) { wouldWin = totalPoints < bet.overUnder; reason = `${totalPoints} vs linea ${bet.overUnder} (LIVE) ${wouldWin ? '→ Sotto ✓' : '→ Sopra ✗'}` }
+          else { wouldWin = null; reason = `Non iniziata (${score.status})` }
+        } else if (bet.pickType === 'ML') {
+          if (score.isFinished) { const homeWon = score.homeScore > score.awayScore; wouldWin = bet.pickedTeam === 'home' ? homeWon : !homeWon; reason = `${score.homeScore}-${score.awayScore} → ${wouldWin ? 'VINCE ✓' : 'PERDE ✗'}` }
+          else if (score.isLive) { const homeLeading = score.homeScore > score.awayScore; wouldWin = bet.pickedTeam === 'home' ? homeLeading : !homeLeading; reason = `${score.homeScore}-${score.awayScore} (LIVE ESPN)` }
+        }
+        resultsRef[bet.id] = { betId: bet.id, homeScore: score.homeScore, awayScore: score.awayScore, status: score.status, isLive: score.isLive, isFinished: score.isFinished, wouldWin, reason }
+      }
+    }
+
+    // Pass 1: ESPN scoreboard di OGGI
+    let unresolvedBets = pending.filter(b => !results[b.id])
     if (unresolvedBets.length > 0) {
       const leagueGroups: Record<string, BetRecord[]> = {}
       for (const bet of unresolvedBets) { const key = `${bet.sport}:${bet.league}`; if (!leagueGroups[key]) leagueGroups[key] = []; leagueGroups[key].push(bet) }
@@ -369,42 +419,38 @@ export default function Home() {
           const res = await fetch(url)
           if (!res.ok) continue
           const data = await res.json()
-
-          const scoreMap: Record<string, { homeScore: number; awayScore: number; status: string; statusCode: string; isFinished: boolean; isLive: boolean }> = {}
-          for (const ev of data.events || []) {
-            const comps = ev.competitions?.[0]; if (!comps) continue
-            const competitors = comps.competitors || []; if (competitors.length < 2) continue
-            const home = competitors.find((c: { homeAway: string }) => c.homeAway === 'home') || competitors[0]
-            const away = competitors.find((c: { homeAway: string }) => c.homeAway === 'away') || competitors[1]
-            const status = ev.status?.type?.shortDetail || ''
-            const statusCode = ev.status?.type?.name || ''
-            const isFinished = status.includes('FT') || status.includes('Final') || statusCode === 'STATUS_FINAL'
-            const isUpcoming = status.includes('Scheduled') || status === "0'" || status === 'TBD' || statusCode === 'STATUS_SCHEDULED'
-            const isLive = !isFinished && !isUpcoming
-            scoreMap[ev.id] = { homeScore: parseInt(home.score || '0'), awayScore: parseInt(away.score || '0'), status, statusCode, isFinished, isLive }
-          }
-
-          for (const bet of leagueBets) {
-            const score = scoreMap[bet.gameId]
-            if (!score) { results[bet.id] = { betId: bet.id, homeScore: 0, awayScore: 0, status: 'Non trovato', isLive: false, isFinished: false, wouldWin: null, reason: 'Partita non trovata' }; continue }
-            const totalPoints = score.homeScore + score.awayScore
-            let wouldWin: boolean | null = null; let reason = ''
-
-            if (bet.pickType === 'OVER' && bet.overUnder) {
-              if (score.isFinished) { wouldWin = totalPoints > bet.overUnder; reason = wouldWin ? `${totalPoints} > ${bet.overUnder} → OVER VINCE ✓` : `${totalPoints} ≤ ${bet.overUnder} → OVER PERDE ✗` }
-              else if (score.isLive) { wouldWin = totalPoints > bet.overUnder; reason = `${totalPoints} vs linea ${bet.overUnder} (LIVE) ${wouldWin ? '→ Sopra ✓' : '→ Sotto ✗'}` }
-              else { wouldWin = null; reason = `Non iniziata (${score.status})` }
-            } else if (bet.pickType === 'UNDER' && bet.overUnder) {
-              if (score.isFinished) { wouldWin = totalPoints < bet.overUnder; reason = wouldWin ? `${totalPoints} < ${bet.overUnder} → UNDER VINCE ✓` : `${totalPoints} ≥ ${bet.overUnder} → UNDER PERDE ✗` }
-              else if (score.isLive) { wouldWin = totalPoints < bet.overUnder; reason = `${totalPoints} vs linea ${bet.overUnder} (LIVE) ${wouldWin ? '→ Sotto ✓' : '→ Sopra ✗'}` }
-              else { wouldWin = null; reason = `Non iniziata (${score.status})` }
-            } else if (bet.pickType === 'ML') {
-              if (score.isFinished) { const homeWon = score.homeScore > score.awayScore; wouldWin = bet.pickedTeam === 'home' ? homeWon : !homeWon; reason = `${score.homeScore}-${score.awayScore} → ${wouldWin ? 'VINCE ✓' : 'PERDE ✗'}` }
-              else if (score.isLive) { const homeLeading = score.homeScore > score.awayScore; wouldWin = bet.pickedTeam === 'home' ? homeLeading : !homeLeading; reason = `${score.homeScore}-${score.awayScore} (LIVE ESPN)` }
-            }
-            results[bet.id] = { betId: bet.id, homeScore: score.homeScore, awayScore: score.awayScore, status: score.status, isLive: score.isLive, isFinished: score.isFinished, wouldWin, reason }
-          }
+          processEspnScoreboard(data, leagueBets, results)
         } catch (e) { console.error(`Error fetching ${key}:`, e) }
+      }
+    }
+
+    // Pass 2: ESPN scoreboard con la DATA DELLA SCOMMESSA (per partite già finite ieri o prima)
+    unresolvedBets = pending.filter(b => !results[b.id])
+    if (unresolvedBets.length > 0) {
+      const dateGroups: Record<string, BetRecord[]> = {}
+      for (const bet of unresolvedBets) {
+        const betDate = new Date(bet.date).toISOString().slice(0, 10).replace(/-/g, '') // YYYYMMDD
+        const groupKey = `${bet.sport}:${bet.league}:${betDate}`
+        if (!dateGroups[groupKey]) dateGroups[groupKey] = []
+        dateGroups[groupKey].push(bet)
+      }
+
+      for (const [groupKey, groupBets] of Object.entries(dateGroups)) {
+        const [sport, league, dateStr] = groupKey.split(':')
+        try {
+          const url = `https://site.api.espn.com/apis/site/v2/sports/${sport}/${league}/scoreboard?dates=${dateStr}`
+          const res = await fetch(url)
+          if (!res.ok) continue
+          const data = await res.json()
+          processEspnScoreboard(data, groupBets, results)
+        } catch (e) { console.error(`Error fetching past ${groupKey}:`, e) }
+      }
+    }
+
+    // Segna come non trovate le scommesse ancora irrisolte
+    for (const bet of pending) {
+      if (!results[bet.id]) {
+        results[bet.id] = { betId: bet.id, homeScore: 0, awayScore: 0, status: 'Non trovato', isLive: false, isFinished: false, wouldWin: null, reason: 'Partita non trovata su nessuna fonte' }
       }
     }
 
