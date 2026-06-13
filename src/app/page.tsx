@@ -47,7 +47,7 @@ interface SimResult {
 }
 
 const DEFAULT_BANKROLL = 150
-const APP_VERSION = '1.6.0'
+const APP_VERSION = '1.7.0'
 
 // Load from localStorage
 function loadState<T>(key: string, fallback: T): T {
@@ -286,10 +286,12 @@ export default function Home() {
       ? americanToDecimal(rec.odds.overOdds)
       : rec.pickType === 'ML' && rec.odds.homeML
       ? americanToDecimal(rec.odds.homeML)
+      : rec.pickType === 'SPREAD'
+      ? 1.91 // spread standard -110
       : 1.80
 
     let pickedTeam: string | undefined
-    if (rec.pickType === 'ML') {
+    if (rec.pickType === 'ML' || rec.pickType === 'SPREAD') {
       pickedTeam = rec.pick.includes(rec.game.homeTeam) ? 'home' : 'away'
     }
 
@@ -397,15 +399,15 @@ export default function Home() {
           if (fastScore.isFinished) { wouldWin = totalPoints < bet.overUnder; reason = wouldWin ? `${totalPoints} < ${bet.overUnder} → UNDER VINCE ✓ [FAST]` : `${totalPoints} ≥ ${bet.overUnder} → UNDER PERDE ✗ [FAST]` }
           else if (fastScore.isLive) { wouldWin = totalPoints < bet.overUnder; reason = `${totalPoints} vs linea ${bet.overUnder} (LIVE ${fastScore.minute ? fastScore.minute + "'" : fastScore.status}) ${wouldWin ? '→ Sotto linea ✓' : '→ Sopra linea ✗'} [FAST ${fastScore.source}]` }
           else { wouldWin = null; reason = `Non ancora iniziata (${fastScore.status})` }
-        } else if (bet.pickType === 'ML') {
+        } else if (bet.pickType === 'ML' || bet.pickType === 'SPREAD') {
           if (fastScore.isFinished) {
             const homeWon = fastScore.homeScore > fastScore.awayScore
-            if (bet.pickedTeam === 'home') { wouldWin = homeWon; reason = `${fastScore.homeScore}-${fastScore.awayScore} → ${bet.homeTeam} ${homeWon ? 'vince ✓' : 'perde ✗'} [FAST]` }
-            else { wouldWin = !homeWon; reason = `${fastScore.homeScore}-${fastScore.awayScore} → ${bet.awayTeam} ${!homeWon ? 'vince ✓' : 'perde ✗'} [FAST]` }
+            if (bet.pickedTeam === 'home') { wouldWin = homeWon; reason = `${fastScore.homeScore}-${fastScore.awayScore} → ${bet.homeTeam} ${homeWon ? 'vince ✓' : 'perde ✗'} [FAST${bet.pickType === 'SPREAD' ? ' SPREAD' : ''}]` }
+            else { wouldWin = !homeWon; reason = `${fastScore.homeScore}-${fastScore.awayScore} → ${bet.awayTeam} ${!homeWon ? 'vince ✓' : 'perde ✗'} [FAST${bet.pickType === 'SPREAD' ? ' SPREAD' : ''}]` }
           } else if (fastScore.isLive) {
             const homeLeading = fastScore.homeScore > fastScore.awayScore
             wouldWin = bet.pickedTeam === 'home' ? homeLeading : !homeLeading
-            reason = `${fastScore.homeScore}-${fastScore.awayScore} (LIVE) [FAST ${fastScore.source}]`
+            reason = `${fastScore.homeScore}-${fastScore.awayScore} (LIVE${bet.pickType === 'SPREAD' ? ' SPREAD' : ''}) [FAST ${fastScore.source}]`
           }
         }
         results[bet.id] = { betId: bet.id, homeScore: fastScore.homeScore, awayScore: fastScore.awayScore, status: fastScore.minute ? `${fastScore.minute}'` : fastScore.status, isLive: fastScore.isLive, isFinished: fastScore.isFinished, wouldWin, reason }
@@ -443,9 +445,9 @@ export default function Home() {
           if (score.isFinished) { wouldWin = totalPoints < bet.overUnder; reason = wouldWin ? `${totalPoints} < ${bet.overUnder} → UNDER VINCE ✓` : `${totalPoints} ≥ ${bet.overUnder} → UNDER PERDE ✗` }
           else if (score.isLive) { wouldWin = totalPoints < bet.overUnder; reason = `${totalPoints} vs linea ${bet.overUnder} (LIVE) ${wouldWin ? '→ Sotto ✓' : '→ Sopra ✗'}` }
           else { wouldWin = null; reason = `Non iniziata (${score.status})` }
-        } else if (bet.pickType === 'ML') {
-          if (score.isFinished) { const homeWon = score.homeScore > score.awayScore; wouldWin = bet.pickedTeam === 'home' ? homeWon : !homeWon; reason = `${score.homeScore}-${score.awayScore} → ${wouldWin ? 'VINCE ✓' : 'PERDE ✗'}` }
-          else if (score.isLive) { const homeLeading = score.homeScore > score.awayScore; wouldWin = bet.pickedTeam === 'home' ? homeLeading : !homeLeading; reason = `${score.homeScore}-${score.awayScore} (LIVE ESPN)` }
+        } else if (bet.pickType === 'ML' || bet.pickType === 'SPREAD') {
+          if (score.isFinished) { const homeWon = score.homeScore > score.awayScore; wouldWin = bet.pickedTeam === 'home' ? homeWon : !homeWon; reason = `${score.homeScore}-${score.awayScore} → ${wouldWin ? 'VINCE ✓' : 'PERDE ✗'}${bet.pickType === 'SPREAD' ? ' [SPREAD]' : ''}` }
+          else if (score.isLive) { const homeLeading = score.homeScore > score.awayScore; wouldWin = bet.pickedTeam === 'home' ? homeLeading : !homeLeading; reason = `${score.homeScore}-${score.awayScore} (LIVE ESPN${bet.pickType === 'SPREAD' ? ' SPREAD' : ''})` }
         }
         resultsRef[bet.id] = { betId: bet.id, homeScore: score.homeScore, awayScore: score.awayScore, status: score.status, isLive: score.isLive, isFinished: score.isFinished, wouldWin, reason }
       }
@@ -616,7 +618,7 @@ export default function Home() {
       {/* Sport Filter */}
       <div className="max-w-4xl mx-auto px-4 pt-3">
         <div className="flex gap-2 overflow-x-auto pb-2">
-          {[ { key: 'all', label: '🔥 Tutti' }, { key: 'soccer', label: '⚽ Calcio' }, { key: 'baseball', label: '⚾ MLB' }, { key: 'basketball', label: '🏀 NBA' }, { key: 'hockey', label: '🏒 NHL' }].map(f => (
+          {[ { key: 'all', label: '🔥 Tutti' }, { key: 'soccer', label: '⚽ Calcio' }, { key: 'basketball', label: '🏀 NBA' }, { key: 'baseball', label: '⚾ MLB' }, { key: 'hockey', label: '🏒 NHL' }, { key: 'football', label: '🏈 NFL' }].map(f => (
             <button key={f.key} onClick={() => setSportFilter(f.key)} className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-all ${sportFilter === f.key ? 'bg-emerald-500 text-black' : 'bg-white/5 text-gray-300 hover:bg-white/10'}`}>
               {f.label}
             </button>
@@ -654,7 +656,7 @@ export default function Home() {
               <div className="space-y-2">
                 <div className="flex items-center justify-between mb-1">
                   <p className="text-xs text-gray-300">{visibleRecommendations.length} pick con edge trovati</p>
-                  <p className="text-[10px] text-gray-300">{sportFilter === 'soccer' ? '⚽ Solo O/U' : 'Tutti i mercati'}</p>
+                  <p className="text-[10px] text-gray-300">O/U · ML · Spread</p>
                 </div>
                 {visibleRecommendations.map((rec) => {
                   const isAlreadySimulated = bets.some(b => b.gameId === rec.game.id && b.pickType === rec.pickType && b.result === 'pending' && b.betType === 'simulated')
@@ -673,11 +675,11 @@ export default function Home() {
                             {(rec.game.homeScore > 0 || rec.game.awayScore > 0) ? (<p className="text-xs text-gray-300">{rec.game.homeScore}-{rec.game.awayScore} | {rec.game.status}</p>) : (<p className="text-xs text-gray-300">{rec.game.status}</p>)}
                             <div className="mt-2 flex items-center gap-2 flex-wrap">
                               <span className={`px-2 py-0.5 rounded text-[11px] font-bold border ${pickTypeColor(rec.pickType)}`}>{rec.pick}</span>
-                              <span className="text-[11px] font-bold text-yellow-300">Quota {(() => { const q = rec.pickType === 'UNDER' && rec.odds.underOdds ? americanToDecimal(rec.odds.underOdds) : rec.pickType === 'OVER' && rec.odds.overOdds ? americanToDecimal(rec.odds.overOdds) : rec.pickType === 'ML' && rec.odds.homeML ? americanToDecimal(rec.odds.homeML) : 0; return q > 0 ? q.toFixed(2) : '-' })()}</span>
+                              <span className="text-[11px] font-bold text-yellow-300">Quota {(() => { const q = rec.pickType === 'UNDER' && rec.odds.underOdds ? americanToDecimal(rec.odds.underOdds) : rec.pickType === 'OVER' && rec.odds.overOdds ? americanToDecimal(rec.odds.overOdds) : rec.pickType === 'ML' && rec.odds.homeML ? americanToDecimal(rec.odds.homeML) : rec.pickType === 'SPREAD' ? 1.91 : 0; return q > 0 ? q.toFixed(2) : '-' })()}</span>
                               <span className={`text-[11px] font-bold ${edgeColor(rec.edge)}`}>Edge +{(rec.edge * 100).toFixed(1)}%</span>
                               <span className="text-[11px] text-gray-300">{confidenceStars(rec.confidence)}</span>
                             </div>
-                            {(() => { const q = rec.pickType === 'UNDER' && rec.odds.underOdds ? americanToDecimal(rec.odds.underOdds) : rec.pickType === 'OVER' && rec.odds.overOdds ? americanToDecimal(rec.odds.overOdds) : rec.pickType === 'ML' && rec.odds.homeML ? americanToDecimal(rec.odds.homeML) : 0; if (q <= 0) return null; const isLive = rec.game.isLive; const minQ = isLive ? q * 0.90 : q * 0.97; const maxQ = q * 1.08; return (<div className={`mt-1.5 flex items-center gap-2 px-2.5 py-1.5 rounded-md border ${isLive ? 'bg-amber-500/10 border-amber-500/30' : 'bg-emerald-500/10 border-emerald-500/30'}`}><span className="text-[10px] text-gray-300">Bet365 deve essere:</span><span className="text-[12px] font-black text-amber-400">{minQ.toFixed(2)}</span><span className="text-[10px] text-gray-400">—</span><span className="text-[12px] font-black text-emerald-400">{maxQ.toFixed(2)}</span>{isLive && (<span className="ml-auto text-[8px] font-bold text-amber-400 animate-pulse">LIVE</span>)}</div>) })()}
+                            {(() => { const q = rec.pickType === 'UNDER' && rec.odds.underOdds ? americanToDecimal(rec.odds.underOdds) : rec.pickType === 'OVER' && rec.odds.overOdds ? americanToDecimal(rec.odds.overOdds) : rec.pickType === 'ML' && rec.odds.homeML ? americanToDecimal(rec.odds.homeML) : rec.pickType === 'SPREAD' ? 1.91 : 0; if (q <= 0) return null; const isLive = rec.game.isLive; const minQ = isLive ? q * 0.90 : q * 0.97; const maxQ = q * 1.08; return (<div className={`mt-1.5 flex items-center gap-2 px-2.5 py-1.5 rounded-md border ${isLive ? 'bg-amber-500/10 border-amber-500/30' : 'bg-emerald-500/10 border-emerald-500/30'}`}><span className="text-[10px] text-gray-300">Bet365 deve essere:</span><span className="text-[12px] font-black text-amber-400">{minQ.toFixed(2)}</span><span className="text-[10px] text-gray-400">—</span><span className="text-[12px] font-black text-emerald-400">{maxQ.toFixed(2)}</span>{isLive && (<span className="ml-auto text-[8px] font-bold text-amber-400 animate-pulse">LIVE</span>)}</div>) })()}
                             <p className="text-[11px] text-gray-300 mt-1">{rec.reasoning}</p>
                           </div>
                           <div className="text-right ml-3 shrink-0">

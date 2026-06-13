@@ -75,94 +75,119 @@ function parseRecordWinPct(record: string): number {
 
 export function analyzeGame(game: Game, odds: OddsData, bankroll: number): Recommendation[] {
   const recs: Recommendation[] = [];
-  
-  if (!odds.overUnder || !odds.overOdds || !odds.underOdds) {
-    // Try ML analysis even without O/U
-    if (odds.homeML && odds.awayML && game.sport !== 'soccer') {
-      return analyzeML(game, odds, bankroll);
-    }
-    return recs;
-  }
-
   const currentGoals = game.homeScore + game.awayScore;
   const isLive = game.isLive;
-  const totalLine = odds.overUnder;
 
-  // Under analysis
-  let underProb = 0.5;
-  let underReasons: string[] = [];
+  // ===== OVER/UNDER ANALYSIS =====
+  if (odds.overUnder && odds.overOdds && odds.underOdds) {
+    const totalLine = odds.overUnder;
 
-  if (game.homeForm && game.awayForm) {
-    const homeDraws = (game.homeForm.match(/D/g) || []).length;
-    const awayDraws = (game.awayForm.match(/D/g) || []).length;
-    if (homeDraws >= 2 && awayDraws >= 2) { underProb += 0.12; underReasons.push('Entrambe difensive'); }
-    if (homeDraws + awayDraws >= 5) { underProb += 0.08; underReasons.push('5+ pareggi'); }
-  }
+    // Under analysis - punto base più basso per catturare più edge
+    let underProb = 0.48;
+    let underReasons: string[] = [];
 
-  if (isLive && currentGoals === 0) { underProb += 0.15; underReasons.push('0-0 live'); }
-  if (isLive && currentGoals <= 1) { underProb += 0.10; underReasons.push('Pochi gol'); }
-  if (totalLine <= 2.0) { underProb += 0.10; underReasons.push('Linea bassa'); }
-  if (totalLine <= 2.5) { underProb += 0.05; underReasons.push('Linea 2.5'); }
+    if (game.homeForm && game.awayForm) {
+      const homeDraws = (game.homeForm.match(/D/g) || []).length;
+      const awayDraws = (game.awayForm.match(/D/g) || []).length;
+      const homeLosses = (game.homeForm.match(/L/g) || []).length;
+      const awayLosses = (game.awayForm.match(/L/g) || []).length;
+      // Squadre difensive (pareggi = partite chiuse)
+      if (homeDraws >= 2 && awayDraws >= 2) { underProb += 0.12; underReasons.push('Entrambe difensive'); }
+      if (homeDraws + awayDraws >= 5) { underProb += 0.08; underReasons.push('5+ pareggi recenti'); }
+      // Squadre che perdono molto = partite sbilanciate con pochi gol
+      if (homeLosses >= 3 && awayLosses >= 3) { underProb += 0.06; underReasons.push('Entrambe in crisi = partita bloccata'); }
+    }
 
-  // Record-based under edge (strong vs weak = controlled game)
-  if (game.homeRecord && game.awayRecord) {
-    const homePct = parseRecordWinPct(game.homeRecord);
-    const awayPct = parseRecordWinPct(game.awayRecord);
-    if (homePct > 0.65 && awayPct < 0.35) {
-      underProb += 0.08;
-      underReasons.push(`${game.homeTeam} domina, partita controllata`);
+    if (isLive && currentGoals === 0) { underProb += 0.15; underReasons.push('0-0 live'); }
+    if (isLive && currentGoals <= 1) { underProb += 0.10; underReasons.push('Pochi gol live'); }
+    if (totalLine <= 2.0) { underProb += 0.10; underReasons.push('Linea bassa'); }
+    if (totalLine <= 2.5) { underProb += 0.05; underReasons.push('Linea 2.5'); }
+
+    // Record-based under edge
+    if (game.homeRecord && game.awayRecord) {
+      const homePct = parseRecordWinPct(game.homeRecord);
+      const awayPct = parseRecordWinPct(game.awayRecord);
+      if (homePct > 0.65 && awayPct < 0.35) {
+        underProb += 0.08; underReasons.push(`${game.homeTeam} domina, partita controllata`);
+      }
+      // Squadre con record simile = partita equilibrata = meno gol
+      if (Math.abs(homePct - awayPct) < 0.10 && homePct > 0.45 && homePct < 0.60) {
+        underProb += 0.05; underReasons.push('Squadre equilibrate = partita tattica');
+      }
+    }
+
+    // Campionato difensivo (Serie A, Ligue 1 tendono ad avere meno gol)
+    const defensiveLeagues = ['ita.1', 'fra.1', 'por.1'];
+    if (defensiveLeagues.includes(game.league)) {
+      underProb += 0.04; underReasons.push('Campionato tendenzialmente Under');
+    }
+
+    // Over analysis - punto base più basso
+    let overProb = 0.48;
+    let overReasons: string[] = [];
+
+    if (game.homeForm && game.awayForm) {
+      const homeWins = (game.homeForm.match(/W/g) || []).length;
+      const awayWins = (game.awayForm.match(/W/g) || []).length;
+      if (homeWins >= 3 && awayWins >= 3) { overProb += 0.10; overReasons.push('Entrambe vincenti = gol'); }
+      // Perdite = partite aperte con gol da entrambe le parti
+      const homeLosses = (game.homeForm.match(/L/g) || []).length;
+      const awayLosses = (game.awayForm.match(/L/g) || []).length;
+      if (homeLosses >= 2 && awayLosses >= 2) { overProb += 0.06; overReasons.push('Entrambe subiscono gol'); }
+    }
+
+    if (isLive && currentGoals >= 2) { overProb += 0.15; overReasons.push('2+ gol già segnati'); }
+    if (isLive && currentGoals >= 3) { overProb += 0.10; overReasons.push('3+ gol'); }
+    if (totalLine >= 3.5) { overProb += 0.05; overReasons.push('Linea alta'); }
+    if (totalLine >= 2.5) { overProb += 0.03; overReasons.push('Linea 2.5+'); }
+
+    // Campionato offensivo (Bundesliga, Eredivisie)
+    const offensiveLeagues = ['ger.1', 'ned.1', 'eng.1'];
+    if (offensiveLeagues.includes(game.league)) {
+      overProb += 0.04; overReasons.push('Campionato tendenzialmente Over');
+    }
+
+    // Under recommendation - soglia abbassata da 0.03 a 0.01, prob da 0.55 a 0.50
+    const underEdge = calculateEdge(underProb, odds.underOdds);
+    if (underEdge > 0.01 && underProb > 0.50) {
+      const confidence = underEdge > 0.10 ? 5 : underEdge > 0.07 ? 4 : underEdge > 0.05 ? 3 : underEdge > 0.03 ? 2 : 1;
+      const stake = calculateStake(confidence, bankroll);
+      const decimalOdds = americanToDecimal(odds.underOdds);
+      recs.push({
+        id: `${game.id}-under`, game, odds,
+        pick: `Under ${totalLine}`, pickType: 'UNDER',
+        confidence, edge: underEdge,
+        suggestedStake: stake,
+        potentialWin: Math.round((stake * decimalOdds - stake) * 100) / 100,
+        reasoning: underReasons.join('. ') || 'Analisi statistica Under',
+      });
+    }
+
+    // Over recommendation - soglia abbassata
+    const overEdge = calculateEdge(overProb, odds.overOdds);
+    if (overEdge > 0.01 && overProb > 0.50) {
+      const confidence = overEdge > 0.10 ? 5 : overEdge > 0.07 ? 4 : overEdge > 0.05 ? 3 : overEdge > 0.03 ? 2 : 1;
+      const stake = calculateStake(confidence, bankroll);
+      const decimalOdds = americanToDecimal(odds.overOdds);
+      recs.push({
+        id: `${game.id}-over`, game, odds,
+        pick: `Over ${totalLine}`, pickType: 'OVER',
+        confidence, edge: overEdge,
+        suggestedStake: stake,
+        potentialWin: Math.round((stake * decimalOdds - stake) * 100) / 100,
+        reasoning: overReasons.join('. ') || 'Analisi statistica Over',
+      });
     }
   }
 
-  // Over analysis
-  let overProb = 0.5;
-  let overReasons: string[] = [];
-
-  if (game.homeForm && game.awayForm) {
-    const homeWins = (game.homeForm.match(/W/g) || []).length;
-    const awayWins = (game.awayForm.match(/W/g) || []).length;
-    if (homeWins >= 3 && awayWins >= 3) { overProb += 0.10; overReasons.push('Entrambe vincenti = gol'); }
-  }
-
-  if (isLive && currentGoals >= 2) { overProb += 0.15; overReasons.push('2+ gol già segnati'); }
-  if (isLive && currentGoals >= 3) { overProb += 0.10; overReasons.push('3+ gol'); }
-  if (totalLine >= 3.5) { overProb += 0.05; overReasons.push('Linea alta'); }
-
-  // Under recommendation
-  const underEdge = calculateEdge(underProb, odds.underOdds);
-  if (underEdge > 0.03 && underProb > 0.55) {
-    const confidence = underEdge > 0.10 ? 5 : underEdge > 0.07 ? 4 : underEdge > 0.05 ? 3 : 2;
-    const stake = calculateStake(confidence, bankroll);
-    const decimalOdds = americanToDecimal(odds.underOdds);
-    recs.push({
-      id: `${game.id}-under`, game, odds,
-      pick: `Under ${totalLine}`, pickType: 'UNDER',
-      confidence, edge: underEdge,
-      suggestedStake: stake,
-      potentialWin: Math.round((stake * decimalOdds - stake) * 100) / 100,
-      reasoning: underReasons.join('. ') || 'Analisi statistica Under',
-    });
-  }
-
-  // Over recommendation
-  const overEdge = calculateEdge(overProb, odds.overOdds);
-  if (overEdge > 0.03 && overProb > 0.55) {
-    const confidence = overEdge > 0.10 ? 5 : overEdge > 0.07 ? 4 : overEdge > 0.05 ? 3 : 2;
-    const stake = calculateStake(confidence, bankroll);
-    const decimalOdds = americanToDecimal(odds.overOdds);
-    recs.push({
-      id: `${game.id}-over`, game, odds,
-      pick: `Over ${totalLine}`, pickType: 'OVER',
-      confidence, edge: overEdge,
-      suggestedStake: stake,
-      potentialWin: Math.round((stake * decimalOdds - stake) * 100) / 100,
-      reasoning: overReasons.join('. ') || 'Analisi statistica Over',
-    });
-  }
-
-  // For non-soccer, also add ML analysis
-  if (game.sport !== 'soccer') {
+  // ===== ML ANALYSIS - ORA ANCHE PER IL CALCIO =====
+  if (odds.homeML && odds.awayML) {
     recs.push(...analyzeML(game, odds, bankroll));
+  }
+
+  // ===== SPREAD ANALYSIS =====
+  if (odds.spread && odds.favorite) {
+    recs.push(...analyzeSpread(game, odds, bankroll));
   }
 
   return recs;
@@ -172,31 +197,37 @@ function analyzeML(game: Game, odds: OddsData, bankroll: number): Recommendation
   const recs: Recommendation[] = [];
   if (!odds.homeML || !odds.awayML) return recs;
 
+  // Analisi basata su record
   if (game.homeRecord && game.awayRecord) {
     const homeWinPct = parseRecordWinPct(game.homeRecord);
     const awayWinPct = parseRecordWinPct(game.awayRecord);
 
-    if (homeWinPct > 0.6 && awayWinPct < 0.45) {
+    // Casa: abbassata soglia da 0.6 a 0.55 e away da 0.45 a 0.50
+    if (homeWinPct > 0.55 && awayWinPct < 0.50) {
       const edge = homeWinPct - impliedProbability(odds.homeML);
-      if (edge > 0.03) {
-        const confidence = edge > 0.10 ? 5 : edge > 0.07 ? 4 : edge > 0.05 ? 3 : 2;
+      // Bonus vantaggio casa per il calcio
+      const homeBonus = game.sport === 'soccer' ? 0.05 : 0.02;
+      const adjustedEdge = edge + homeBonus;
+      if (adjustedEdge > 0.01) {
+        const confidence = adjustedEdge > 0.10 ? 5 : adjustedEdge > 0.07 ? 4 : adjustedEdge > 0.05 ? 3 : adjustedEdge > 0.03 ? 2 : 1;
         const stake = calculateStake(confidence, bankroll);
         const decimalOdds = americanToDecimal(odds.homeML);
         recs.push({
           id: `${game.id}-home-ml`, game, odds,
           pick: `${game.homeTeam} ML`, pickType: 'ML',
-          confidence, edge,
+          confidence, edge: adjustedEdge,
           suggestedStake: stake,
           potentialWin: Math.round((stake * decimalOdds - stake) * 100) / 100,
-          reasoning: `${game.homeRecord} vs ${game.awayRecord}, forte in casa`,
+          reasoning: `${game.homeRecord} vs ${game.awayRecord}, forte in casa${game.sport === 'soccer' ? ' + bonus casa' : ''}`,
         });
       }
     }
 
-    if (awayWinPct > 0.6 && homeWinPct < 0.45) {
+    // Trasferta: soglie abbassate
+    if (awayWinPct > 0.55 && homeWinPct < 0.50) {
       const edge = awayWinPct - impliedProbability(odds.awayML);
-      if (edge > 0.03) {
-        const confidence = edge > 0.10 ? 5 : edge > 0.07 ? 4 : edge > 0.05 ? 3 : 2;
+      if (edge > 0.01) {
+        const confidence = edge > 0.10 ? 5 : edge > 0.07 ? 4 : edge > 0.05 ? 3 : edge > 0.03 ? 2 : 1;
         const stake = calculateStake(confidence, bankroll);
         const decimalOdds = americanToDecimal(odds.awayML);
         recs.push({
@@ -206,6 +237,163 @@ function analyzeML(game: Game, odds: OddsData, bankroll: number): Recommendation
           suggestedStake: stake,
           potentialWin: Math.round((stake * decimalOdds - stake) * 100) / 100,
           reasoning: `${game.awayRecord} vs ${game.homeRecord}, forte fuori`,
+        });
+      }
+    }
+  }
+
+  // Analisi basata su form (anche senza record)
+  if (game.homeForm && game.awayForm) {
+    const homeWins = (game.homeForm.match(/W/g) || []).length;
+    const homeTotal = game.homeForm.length;
+    const awayWins = (game.awayForm.match(/W/g) || []).length;
+    const awayTotal = game.awayForm.length;
+
+    if (homeTotal >= 4 && awayTotal >= 4) {
+      const homeFormPct = homeWins / homeTotal;
+      const awayFormPct = awayWins / awayTotal;
+
+      // Forma casa eccellente vs forma trasferta pessima
+      if (homeFormPct > 0.6 && awayFormPct < 0.3 && odds.homeML) {
+        const edge = homeFormPct - impliedProbability(odds.homeML) + (game.sport === 'soccer' ? 0.05 : 0.02);
+        if (edge > 0.01) {
+          const confidence = edge > 0.10 ? 5 : edge > 0.07 ? 4 : edge > 0.05 ? 3 : edge > 0.03 ? 2 : 1;
+          const stake = calculateStake(confidence, bankroll);
+          const decimalOdds = americanToDecimal(odds.homeML);
+          recs.push({
+            id: `${game.id}-home-ml-form`, game, odds,
+            pick: `${game.homeTeam} ML`, pickType: 'ML',
+            confidence, edge,
+            suggestedStake: stake,
+            potentialWin: Math.round((stake * decimalOdds - stake) * 100) / 100,
+            reasoning: `Form ${game.homeForm} vs ${game.awayForm}, casa in grande stato`,
+          });
+        }
+      }
+
+      // Forma trasferta eccellente
+      if (awayFormPct > 0.6 && homeFormPct < 0.3 && odds.awayML) {
+        const edge = awayFormPct - impliedProbability(odds.awayML);
+        if (edge > 0.01) {
+          const confidence = edge > 0.10 ? 5 : edge > 0.07 ? 4 : edge > 0.05 ? 3 : edge > 0.03 ? 2 : 1;
+          const stake = calculateStake(confidence, bankroll);
+          const decimalOdds = americanToDecimal(odds.awayML);
+          recs.push({
+            id: `${game.id}-away-ml-form`, game, odds,
+            pick: `${game.awayTeam} ML`, pickType: 'ML',
+            confidence, edge,
+            suggestedStake: stake,
+            potentialWin: Math.round((stake * decimalOdds - stake) * 100) / 100,
+            reasoning: `Form ${game.awayForm} vs ${game.homeForm}, ospite in grande stato`,
+          });
+        }
+      }
+    }
+  }
+
+  // Live ML: squadra in vantaggio con quota alta
+  if (game.isLive && game.homeScore !== game.awayScore) {
+    const homeLeading = game.homeScore > game.awayScore;
+    const mlOdds = homeLeading ? odds.homeML : odds.awayML;
+    const leadingTeam = homeLeading ? game.homeTeam : game.awayTeam;
+    if (mlOdds && mlOdds > 0) { // underdog che sta vincendo
+      const liveProb = 0.60 + Math.abs(game.homeScore - game.awayScore) * 0.10;
+      const edge = liveProb - impliedProbability(mlOdds);
+      if (edge > 0.01) {
+        const confidence = edge > 0.10 ? 5 : edge > 0.07 ? 4 : edge > 0.05 ? 3 : 2;
+        const stake = calculateStake(confidence, bankroll);
+        const decimalOdds = americanToDecimal(mlOdds);
+        recs.push({
+          id: `${game.id}-live-ml`, game, odds,
+          pick: `${leadingTeam} ML`, pickType: 'ML',
+          confidence, edge,
+          suggestedStake: stake,
+          potentialWin: Math.round((stake * decimalOdds - stake) * 100) / 100,
+          reasoning: `LIVE ${game.homeScore}-${game.awayScore}, ${leadingTeam} in vantaggio`,
+        });
+      }
+    }
+  }
+
+  return recs;
+}
+
+function analyzeSpread(game: Game, odds: OddsData, bankroll: number): Recommendation[] {
+  const recs: Recommendation[] = [];
+  if (!odds.spread || !odds.favorite) return recs;
+
+  // Parse spread (e.g. "-3.5" means favorite gives 3.5 points)
+  const spreadNum = parseFloat(odds.spread);
+  if (isNaN(spreadNum) || spreadNum === 0) return recs;
+
+  const isHomeFav = odds.favorite?.includes(game.homeTeam);
+  const favTeam = isHomeFav ? game.homeTeam : game.awayTeam;
+  const underdogTeam = isHomeFav ? game.awayTeam : game.homeTeam;
+
+  // Record-based spread analysis
+  if (game.homeRecord && game.awayRecord) {
+    const homePct = parseRecordWinPct(game.homeRecord);
+    const awayPct = parseRecordWinPct(game.awayRecord);
+
+    // Favorite should cover spread
+    if (isHomeFav && homePct > 0.65 && Math.abs(spreadNum) <= 7) {
+      const favProb = homePct * 0.85; // Cover rate is lower than win rate
+      const edge = favProb - 0.52; // Spread is roughly 50/50 by design
+      if (edge > 0.01) {
+        const confidence = edge > 0.08 ? 4 : edge > 0.05 ? 3 : 2;
+        const stake = calculateStake(confidence, bankroll);
+        const spreadOdds = odds.homeML || -110; // fallback
+        const decimalOdds = americanToDecimal(spreadOdds);
+        recs.push({
+          id: `${game.id}-spread-fav`, game, odds,
+          pick: `${favTeam} ${odds.spread}`, pickType: 'SPREAD',
+          confidence, edge,
+          suggestedStake: stake,
+          potentialWin: Math.round((stake * decimalOdds - stake) * 100) / 100,
+          reasoning: `${game.homeRecord} vs ${game.awayRecord}, ${favTeam} copre lo spread`,
+        });
+      }
+    }
+
+    // Underdog with spread (getting points)
+    if (!isHomeFav && awayPct > 0.45 && Math.abs(spreadNum) >= 3) {
+      const dogProb = 0.50 + (Math.abs(spreadNum) * 0.03); // Bigger spread = more value for dog
+      const edge = dogProb - 0.50;
+      if (edge > 0.01) {
+        const confidence = edge > 0.08 ? 4 : edge > 0.05 ? 3 : 2;
+        const stake = calculateStake(confidence, bankroll);
+        const spreadOdds = odds.awayML || -110;
+        const decimalOdds = americanToDecimal(spreadOdds);
+        recs.push({
+          id: `${game.id}-spread-dog`, game, odds,
+          pick: `${underdogTeam} +${Math.abs(spreadNum)}`, pickType: 'SPREAD',
+          confidence, edge,
+          suggestedStake: stake,
+          potentialWin: Math.round((stake * decimalOdds - stake) * 100) / 100,
+          reasoning: `${underdogTeam} prende ${Math.abs(spreadNum)} punti, valore sottovalutato`,
+        });
+      }
+    }
+  }
+
+  // Live spread: if favorite is trailing, spread value increases
+  if (game.isLive && isHomeFav && game.homeScore < game.awayScore) {
+    const deficit = game.awayScore - game.homeScore;
+    if (deficit <= Math.abs(spreadNum)) {
+      const liveProb = 0.55 + (Math.abs(spreadNum) - deficit) * 0.05;
+      const edge = liveProb - 0.50;
+      if (edge > 0.01) {
+        const confidence = edge > 0.08 ? 4 : edge > 0.05 ? 3 : 2;
+        const stake = calculateStake(confidence, bankroll);
+        const spreadOdds = odds.homeML || -110;
+        const decimalOdds = americanToDecimal(spreadOdds);
+        recs.push({
+          id: `${game.id}-live-spread`, game, odds,
+          pick: `${favTeam} ${odds.spread}`, pickType: 'SPREAD',
+          confidence, edge,
+          suggestedStake: stake,
+          potentialWin: Math.round((stake * decimalOdds - stake) * 100) / 100,
+          reasoning: `LIVE ${game.homeScore}-${game.awayScore}, ${favTeam} sotto ma copre spread`,
         });
       }
     }
@@ -588,26 +776,54 @@ export function mergeFastScores(games: Game[], fastScores: FastLiveScore[]): Gam
 // ===== DATA FETCHING (client-side) =====
 
 const SPORTS_CONFIG = [
-  { sport: 'soccer', league: 'bra.1', name: 'Brasileirão', emoji: '⚽' },
-  { sport: 'soccer', league: 'swe.1', name: 'Allsvenskan', emoji: '⚽' },
-  { sport: 'soccer', league: 'bel.1', name: 'Pro League', emoji: '⚽' },
+  // Top 5 europei
   { sport: 'soccer', league: 'eng.1', name: 'Premier League', emoji: '⚽' },
   { sport: 'soccer', league: 'ita.1', name: 'Serie A', emoji: '⚽' },
   { sport: 'soccer', league: 'esp.1', name: 'La Liga', emoji: '⚽' },
   { sport: 'soccer', league: 'ger.1', name: 'Bundesliga', emoji: '⚽' },
   { sport: 'soccer', league: 'fra.1', name: 'Ligue 1', emoji: '⚽' },
+  // Coppe europee
+  { sport: 'soccer', league: 'uefa.champions', name: 'Champions League', emoji: '🏆' },
+  { sport: 'soccer', league: 'uefa.europa', name: 'Europa League', emoji: '🏆' },
+  { sport: 'soccer', league: 'uefa.europa.conf', name: 'Conference League', emoji: '🏆' },
+  // Seconde divisioni
+  { sport: 'soccer', league: 'eng.2', name: 'Championship', emoji: '⚽' },
+  { sport: 'soccer', league: 'ita.2', name: 'Serie B', emoji: '⚽' },
+  { sport: 'soccer', league: 'esp.2', name: 'La Liga 2', emoji: '⚽' },
+  { sport: 'soccer', league: 'ger.2', name: '2. Bundesliga', emoji: '⚽' },
+  { sport: 'soccer', league: 'fra.2', name: 'Ligue 2', emoji: '⚽' },
+  // Altre leghe europee
   { sport: 'soccer', league: 'por.1', name: 'Liga Portugal', emoji: '⚽' },
   { sport: 'soccer', league: 'ned.1', name: 'Eredivisie', emoji: '⚽' },
-  { sport: 'soccer', league: 'irl.1', name: 'League of Ireland', emoji: '⚽' },
+  { sport: 'soccer', league: 'bel.1', name: 'Pro League', emoji: '⚽' },
+  { sport: 'soccer', league: 'tur.1', name: 'Süper Lig', emoji: '⚽' },
+  { sport: 'soccer', league: 'swe.1', name: 'Allsvenskan', emoji: '⚽' },
   { sport: 'soccer', league: 'nor.1', name: 'Eliteserien', emoji: '⚽' },
   { sport: 'soccer', league: 'den.1', name: 'Superliga', emoji: '⚽' },
-  { sport: 'soccer', league: 'tur.1', name: 'Süper Lig', emoji: '⚽' },
-  { sport: 'soccer', league: 'mex.1', name: 'Liga MX', emoji: '⚽' },
+  { sport: 'soccer', league: 'irl.1', name: 'League of Ireland', emoji: '⚽' },
+  { sport: 'soccer', league: 'sui.1', name: 'Super League', emoji: '⚽' },
+  { sport: 'soccer', league: 'aut.1', name: 'Bundesliga (AUT)', emoji: '⚽' },
+  { sport: 'soccer', league: 'pol.1', name: 'Ekstraklasa', emoji: '⚽' },
+  { sport: 'soccer', league: 'cze.1', name: 'First League', emoji: '⚽' },
+  { sport: 'soccer', league: 'gre.1', name: 'Super League', emoji: '⚽' },
+  { sport: 'soccer', league: 'rus.1', name: 'Premier League (RUS)', emoji: '⚽' },
+  // Americhe
+  { sport: 'soccer', league: 'bra.1', name: 'Brasileirão', emoji: '⚽' },
   { sport: 'soccer', league: 'arg.1', name: 'Liga Profesional', emoji: '⚽' },
+  { sport: 'soccer', league: 'mex.1', name: 'Liga MX', emoji: '⚽' },
   { sport: 'soccer', league: 'usa.1', name: 'MLS', emoji: '⚽' },
+  { sport: 'soccer', league: 'concacaf.champions', name: 'CONCACAF CL', emoji: '🏆' },
+  // Asia
+  { sport: 'soccer', league: 'jpn.1', name: 'J-League', emoji: '⚽' },
+  { sport: 'soccer', league: 'kor.1', name: 'K League', emoji: '⚽' },
+  { sport: 'soccer', league: 'chn.1', name: 'Super League', emoji: '⚽' },
+  // Altri sport
   { sport: 'baseball', league: 'mlb', name: 'MLB', emoji: '⚾' },
   { sport: 'hockey', league: 'nhl', name: 'NHL', emoji: '🏒' },
   { sport: 'basketball', league: 'nba', name: 'NBA', emoji: '🏀' },
+  { sport: 'basketball', league: 'wnba', name: 'WNBA', emoji: '🏀' },
+  { sport: 'football', league: 'nfl', name: 'NFL', emoji: '🏈' },
+  { sport: 'football', league: 'cfb', name: 'NCAAF', emoji: '🏈' },
 ];
 
 export async function fetchAllGames(sportFilter: string = 'all'): Promise<Game[]> {
@@ -678,7 +894,27 @@ export async function fetchGameOdds(sport: string, league: string, eventId: stri
     if (!res.ok) return null;
     const data = await res.json();
 
-    const pick = data.pickcenter?.[0];
+    // Prova pickcenter (primo provider)
+    let pick = data.pickcenter?.[0];
+    
+    // Se il primo non ha O/U, prova gli altri provider
+    if (!pick?.overUnder && data.pickcenter) {
+      for (const p of data.pickcenter) {
+        if (p.overUnder) { pick = p; break; }
+      }
+    }
+    
+    // Fallback: prova da winsProjections (alternate odds source)
+    if (!pick?.overUnder) {
+      const wp = data.winsProjections?.[0];
+      if (wp) {
+        pick = pick || {};
+        pick.overUnder = pick.overUnder || wp.overUnder;
+        pick.overOdds = pick.overOdds || wp.overOdds;
+        pick.underOdds = pick.underOdds || wp.underOdds;
+      }
+    }
+    
     if (!pick) return null;
 
     return {
@@ -714,7 +950,7 @@ export async function fetchAllRecommendations(bankroll: number, sportFilter: str
     const recs = analyzeGame(game, odds, bankroll);
     for (const rec of recs) {
       const count = leagueBetCount[game.league] || 0;
-      if (count >= 2) continue;
+      if (count >= 4) continue; // Aumentato da 2 a 4 pick per lega
       leagueBetCount[game.league] = count + 1;
       allRecs.push(rec);
     }
