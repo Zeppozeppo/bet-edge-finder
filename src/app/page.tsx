@@ -47,6 +47,7 @@ interface SimResult {
 }
 
 const DEFAULT_BANKROLL = 150
+const APP_VERSION = '1.5.0'
 
 // Load from localStorage
 function loadState<T>(key: string, fallback: T): T {
@@ -113,6 +114,7 @@ export default function Home() {
   const touchStartY = useRef(0)
   const isPulling = useRef(false)
   const PULL_THRESHOLD = 80
+  const hasAutoSettled = useRef(false) // Previene loop auto-settle
 
   // Load saved state on mount
   useEffect(() => {
@@ -205,19 +207,29 @@ export default function Home() {
     if (!mounted) return
     fetchGames()
     fetchRecs()
-    // Auto-settle: controlla risultati delle scommesse pending al caricamento
+    const interval = setInterval(() => { fetchGames(); fetchRecs() }, 30000)
+    return () => { clearInterval(interval) }
+  }, [fetchGames, fetchRecs, mounted])
+
+  // Auto-settle: una sola volta al caricamento, poi ogni 3 minuti
+  useEffect(() => {
+    if (!mounted || hasAutoSettled.current) return
     if (bets.some(b => b.result === 'pending')) {
+      hasAutoSettled.current = true
       simulateBets()
     }
-    const interval = setInterval(() => { fetchGames(); fetchRecs() }, 30000)
-    // Auto-settle ogni 2 minuti per scommesse pending
+  }, [mounted, bets])
+
+  // Auto-settle periodico ogni 3 minuti
+  useEffect(() => {
+    if (!mounted) return
     const settleInterval = setInterval(() => {
-      if (bets.some(b => b.result === 'pending')) {
+      if (bets.some(b => b.result === 'pending') && !simulating) {
         simulateBets()
       }
-    }, 120000)
-    return () => { clearInterval(interval); clearInterval(settleInterval) }
-  }, [fetchGames, fetchRecs, mounted])
+    }, 180000)
+    return () => { clearInterval(settleInterval) }
+  }, [mounted])
 
   // Pull-to-refresh handlers
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
@@ -545,7 +557,7 @@ export default function Home() {
           <div className="flex items-center gap-1.5 shrink-0">
             <div className="text-xl">🎯</div>
             <div>
-              <h1 className="text-sm font-black tracking-tight text-white">BET EDGE FINDER</h1>
+              <h1 className="text-sm font-black tracking-tight text-white">BET EDGE FINDER <span className="text-[8px] font-normal text-emerald-400/60">v{APP_VERSION}</span></h1>
               <p className="text-[8px] text-gray-300 tracking-widest uppercase">Live AI Recommendations</p>
             </div>
           </div>
