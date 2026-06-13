@@ -641,7 +641,7 @@ export async function fetchAllGames(sportFilter: string = 'all'): Promise<Game[]
         const away = competitors.find((c: { homeAway: string }) => c.homeAway === 'away') || competitors[1];
 
         games.push({
-          id: ev.id,
+          id: String(ev.id),
           sport: config.sport,
           sportEmoji: config.emoji,
           league: config.league,

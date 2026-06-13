@@ -243,9 +243,15 @@ export default function Home() {
     const type = isSimulated ? 'simulated' : 'played'
     // Previente duplicati: se ho già GIOCAto (qualsiasi risultato) non posso rifarlo
     // Per SIMULA: previene solo se c'è già una simulazione pending
+    // Usa String() + fallback nomi squadre per match robusto
+    const matchBet = (b: BetRecord) => {
+      const idMatch = String(b.gameId) === String(rec.game.id)
+      const teamMatch = b.sport === rec.game.sport && b.homeTeam === rec.game.homeTeam && b.awayTeam === rec.game.awayTeam
+      return (idMatch || teamMatch) && b.pickType === rec.pickType
+    }
     const alreadyBet = isSimulated
-      ? bets.some(b => b.gameId === rec.game.id && b.pickType === rec.pickType && b.result === 'pending' && b.betType === type)
-      : bets.some(b => b.gameId === rec.game.id && b.pickType === rec.pickType && b.betType === type)
+      ? bets.some(b => matchBet(b) && b.result === 'pending' && b.betType === type)
+      : bets.some(b => matchBet(b) && b.betType === type)
     if (alreadyBet) return
 
     const quota = rec.pickType === 'UNDER' && rec.odds.underOdds
@@ -480,8 +486,13 @@ export default function Home() {
   
   // FILTRO FONDAMENTALE: Nasconde i consigli se sono già stati giocati con GIOCA (qualsiasi risultato)
   // o se c'è una scommessa già archiviata (won/lost) anche da SIMULA (partita finita = non ha più senso)
+  // Usa String() per evitare bug tipo (number !== string) e fallback su nomi squadre
   const visibleRecommendations = recommendations.filter(rec => 
-    !bets.some(b => b.gameId === rec.game.id && b.pickType === rec.pickType && (b.betType === 'played' || b.result === 'won' || b.result === 'lost'))
+    !bets.some(b => {
+      const idMatch = String(b.gameId) === String(rec.game.id)
+      const teamMatch = b.sport === rec.game.sport && b.homeTeam === rec.game.homeTeam && b.awayTeam === rec.game.awayTeam
+      return (idMatch || teamMatch) && b.pickType === rec.pickType && (b.betType === 'played' || b.result === 'won' || b.result === 'lost')
+    })
   )
 
   if (!mounted) {
