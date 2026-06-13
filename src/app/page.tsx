@@ -103,6 +103,7 @@ export default function Home() {
   const [showSettings, setShowSettings] = useState(false)
   const [rapidApiKey, setRapidApiKey] = useState('')
   const [footballDataToken, setFootballDataToken] = useState('')
+  const [bet365Key, setBet365Key] = useState('')
   const [fastScores, setFastScores] = useState<FastLiveScore[]>([])
   const [fetchingFast, setFetchingFast] = useState(false)
 
@@ -119,6 +120,7 @@ export default function Home() {
     const savedBets = loadState<BetRecord[]>('bef-bets', [])
     const savedRapidKey = loadState<string>('bef-rapidapi-key', '')
     const savedFdToken = loadState<string>('bef-footballdata-token', '')
+    const savedBet365Key = loadState<string>('bef-bet365-key', '')
     const migratedBets = savedBets.map(b => ({
       ...b,
       gameId: b.gameId || '',
@@ -135,6 +137,7 @@ export default function Home() {
     setBets(migratedBets)
     setRapidApiKey(savedRapidKey)
     setFootballDataToken(savedFdToken)
+    setBet365Key(savedBet365Key)
     setMounted(true)
   }, [])
 
@@ -143,6 +146,7 @@ export default function Home() {
   useEffect(() => { if (mounted) saveState('bef-bets', bets) }, [bets, mounted])
   useEffect(() => { if (mounted) saveState('bef-rapidapi-key', rapidApiKey) }, [rapidApiKey, mounted])
   useEffect(() => { if (mounted) saveState('bef-footballdata-token', footballDataToken) }, [footballDataToken, mounted])
+  useEffect(() => { if (mounted) saveState('bef-bet365-key', bet365Key) }, [bet365Key, mounted])
 
   const fetchGames = useCallback(async () => {
     setLoading(true)
@@ -168,8 +172,8 @@ export default function Home() {
     if (sbScores.status === 'fulfilled') allFast.push(...sbScores.value)
     if (tsdbScores.status === 'fulfilled') allFast.push(...tsdbScores.value)
 
-    if (rapidApiKey) {
-      const afScores = await fetchFastLiveScores_ApiFootball(rapidApiKey)
+    if (rapidApiKey || bet365Key) {
+      const afScores = await fetchFastLiveScores_ApiFootball(rapidApiKey || bet365Key)
       allFast.push(...afScores)
     }
     if (footballDataToken) {
@@ -307,8 +311,8 @@ export default function Home() {
     if (sbScores.status === 'fulfilled') allFast.push(...sbScores.value)
     if (tsdbScores.status === 'fulfilled') allFast.push(...tsdbScores.value)
 
-    if (rapidApiKey) {
-      const afScores = await fetchFastLiveScores_ApiFootball(rapidApiKey)
+    if (rapidApiKey || bet365Key) {
+      const afScores = await fetchFastLiveScores_ApiFootball(rapidApiKey || bet365Key)
       allFast.push(...afScores)
     }
     if (footballDataToken) {
@@ -684,6 +688,21 @@ export default function Home() {
                     onChange={e => setRapidApiKey(e.target.value)}
                     placeholder="Inserisci RapidAPI Key..."
                     className="w-full bg-white/5 border border-white/10 rounded px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-orange-500"
+                  />
+                </div>
+
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <Bolt className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="text-xs font-bold text-emerald-400">Bet365 Quote</span>
+                  </div>
+                  <p className="text-[10px] text-gray-300 mb-1.5">Per sbloccare le quote di Bet365, incolla qui la stessa RapidAPI Key.</p>
+                  <input
+                    type="password"
+                    value={bet365Key}
+                    onChange={e => setBet365Key(e.target.value)}
+                    placeholder="Incolla la tua RapidAPI Key..."
+                    className="w-full bg-white/5 border border-emerald-500/30 rounded px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-emerald-500"
                   />
                 </div>
 
