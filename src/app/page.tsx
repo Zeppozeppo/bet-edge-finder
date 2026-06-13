@@ -241,8 +241,11 @@ export default function Home() {
   // LOGICA GIOCA / SIMULA
   const addBet = (rec: Recommendation, isSimulated: boolean) => {
     const type = isSimulated ? 'simulated' : 'played'
-    // Previente duplicati per lo stesso tipo (es. non posso fare GIOCA 2 volte)
-    const alreadyBet = bets.some(b => b.gameId === rec.game.id && b.pickType === rec.pickType && b.result === 'pending' && b.betType === type)
+    // Previente duplicati: se ho già GIOCAto (qualsiasi risultato) non posso rifarlo
+    // Per SIMULA: previene solo se c'è già una simulazione pending
+    const alreadyBet = isSimulated
+      ? bets.some(b => b.gameId === rec.game.id && b.pickType === rec.pickType && b.result === 'pending' && b.betType === type)
+      : bets.some(b => b.gameId === rec.game.id && b.pickType === rec.pickType && b.betType === type)
     if (alreadyBet) return
 
     const quota = rec.pickType === 'UNDER' && rec.odds.underOdds
@@ -475,9 +478,10 @@ export default function Home() {
   const liveGames = games.filter(g => g.isLive)
   const upcomingGames = games.filter(g => !g.isLive)
   
-  // FILTRO FONDAMENTALE: Nasconde i consigli se sono già stati giocati con GIOCA (pending, won o lost)
+  // FILTRO FONDAMENTALE: Nasconde i consigli se sono già stati giocati con GIOCA (qualsiasi risultato)
+  // o se c'è una scommessa già archiviata (won/lost) anche da SIMULA (partita finita = non ha più senso)
   const visibleRecommendations = recommendations.filter(rec => 
-    !bets.some(b => b.gameId === rec.game.id && b.pickType === rec.pickType && b.betType === 'played')
+    !bets.some(b => b.gameId === rec.game.id && b.pickType === rec.pickType && (b.betType === 'played' || b.result === 'won' || b.result === 'lost'))
   )
 
   if (!mounted) {
