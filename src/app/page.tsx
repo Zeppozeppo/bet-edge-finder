@@ -303,7 +303,10 @@ export default function Home() {
   const resetBankroll = () => {
     setBankroll(DEFAULT_BANKROLL)
     setBets([])
+    setSimResults({})
     setShowResetConfirm(false)
+    // Re-fetch consigli per pulire partite finite
+    fetchRecs()
   }
 
   const deleteBet = (id: string) => {

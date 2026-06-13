@@ -630,7 +630,8 @@ export async function fetchAllGames(sportFilter: string = 'all'): Promise<Game[]
         const status = ev.status?.type?.shortDetail || '';
         const statusCode = ev.status?.type?.name || '';
         const isUpcoming = status.includes('Scheduled') || status === "0'" || status === 'TBD' || statusCode === 'STATUS_SCHEDULED';
-        const isLive = !isUpcoming && !status.includes('FT') && !status.includes('Final') && !status.includes('Postponed') && !status.includes('Postponed') && statusCode !== 'STATUS_FINAL' && statusCode !== 'STATUS_POSTPONED';
+        const isFinished = status.includes('FT') || status.includes('Final') || status.includes('AET') || status.includes('PEN') || status.includes('Postponed') || status.includes('Cancel') || status.includes('Suspended') || status.includes('Delay') || status.includes('AWD') || status.includes('WO') || statusCode === 'STATUS_FINAL' || statusCode === 'STATUS_POSTPONED' || statusCode === 'STATUS_CANCELED' || statusCode === 'STATUS_SUSPENDED';
+        const isLive = !isUpcoming && !isFinished;
 
         if (!isLive && !isUpcoming) continue;
 
