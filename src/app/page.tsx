@@ -23,8 +23,6 @@ interface BetRecord {
   quota: number
   result: 'pending' | 'won' | 'lost'
   date: string
-  betType: 'played' | 'simulated' // NUOVO: distingue GIOCA da SIMULA
-  // Simulation data
   gameId: string
   sport: string
   league: string
@@ -32,7 +30,8 @@ interface BetRecord {
   overUnder?: number
   homeTeam: string
   awayTeam: string
-  pickedTeam?: string 
+  pickedTeam?: string
+  betType?: string // retro-compatibilità, ignorato
 }
 
 interface SimResult {
@@ -47,7 +46,7 @@ interface SimResult {
 }
 
 const DEFAULT_BANKROLL = 150
-const APP_VERSION = '1.7.0'
+const APP_VERSION = '1.8.0'
 
 // Load from localStorage
 function loadState<T>(key: string, fallback: T): T {
@@ -136,7 +135,6 @@ export default function Home() {
       homeTeam: b.homeTeam || '',
       awayTeam: b.awayTeam || '',
       pickedTeam: b.pickedTeam,
-      betType: b.betType || 'played' as const, // MIGRAZIONE
     }))
     setBankroll(savedBankroll)
     setBets(migratedBets)
@@ -145,7 +143,7 @@ export default function Home() {
     setBet365Key(savedBet365Key)
     // MIGRAZIONE: aggiungi gameId delle scommesse esistenti (won/lost) ai nascosti
     const betGameIds = migratedBets
-      .filter(b => b.betType === 'played' || b.result === 'won' || b.result === 'lost')
+      .filter(b => b.result === 'won' || b.result === 'lost')
       .map(b => String(b.gameId))
       .filter(id => id && id !== '')
     const mergedHidden = new Set([...savedHiddenIds, ...betGameIds])
@@ -261,20 +259,14 @@ export default function Home() {
     } else { setPullDistance(0); isPulling.current = false }
   }, [pullDistance, isRefreshing, fetchGames, fetchRecs])
 
-  // LOGICA GIOCA / SIMULA
-  const addBet = (rec: Recommendation, isSimulated: boolean) => {
-    const type = isSimulated ? 'simulated' : 'played'
-    // Previente duplicati: se ho già GIOCAto (qualsiasi risultato) non posso rifarlo
-    // Per SIMULA: previene solo se c'è già una simulazione pending
-    // Usa String() + fallback nomi squadre per match robusto
-    const matchBet = (b: BetRecord) => {
+  // LOGICA GIOCA
+  const addBet = (rec: Recommendation) => {
+    // Previene duplicati
+    const alreadyBet = bets.some(b => {
       const idMatch = String(b.gameId) === String(rec.game.id)
       const teamMatch = b.sport === rec.game.sport && b.homeTeam === rec.game.homeTeam && b.awayTeam === rec.game.awayTeam
       return (idMatch || teamMatch) && b.pickType === rec.pickType
-    }
-    const alreadyBet = isSimulated
-      ? bets.some(b => matchBet(b) && b.result === 'pending' && b.betType === type)
-      : bets.some(b => matchBet(b) && b.betType === type)
+    })
     if (alreadyBet) return
 
     // Aggiungi ai giochi nascosti (persiste nel reset!)
@@ -296,7 +288,7 @@ export default function Home() {
     }
 
     setBets(prev => [{
-      id: `${rec.id}-${type}`, // ID unico per GIOCA e SIMULA
+      id: `${rec.id}`,
       pick: `${rec.game.sportEmoji} ${rec.game.homeTeam}-${rec.game.awayTeam} ${rec.pick}`,
       stake: rec.suggestedStake,
       quota: Math.round(quota * 100) / 100,
@@ -310,19 +302,15 @@ export default function Home() {
       homeTeam: rec.game.homeTeam,
       awayTeam: rec.game.awayTeam,
       pickedTeam,
-      betType: type,
     }, ...prev])
     
-    // Scala dal bankroll SOLO se è GIOCA
-    if (!isSimulated) {
-      setBankroll(prev => prev - rec.suggestedStake)
-    }
+    // Scala dal bankroll
+    setBankroll(prev => prev - rec.suggestedStake)
   }
 
   const settleBet = (id: string, result: 'won' | 'lost') => {
     const bet = bets.find(b => b.id === id)
-    // Aggiorna il bankroll SOLO se la scommessa era reale (GIOCA)
-    if (bet && result === 'won' && bet.betType === 'played') {
+    if (bet && result === 'won') {
       setBankroll(prev => prev + bet.stake * bet.quota)
     }
     setBets(prev => prev.map(b => b.id === id ? { ...b, result } : b))
@@ -341,8 +329,8 @@ export default function Home() {
 
   const deleteBet = (id: string) => {
     const bet = bets.find(b => b.id === id)
-    if (bet && bet.result === 'pending' && bet.betType === 'played') {
-      setBankroll(prev => prev + bet.stake) // Ritorna i soldi solo se era GIOCA
+    if (bet && bet.result === 'pending') {
+      setBankroll(prev => prev + bet.stake) // Ritorna i soldi
     }
     setBets(prev => prev.filter(b => b.id !== id))
   }
@@ -352,7 +340,7 @@ export default function Home() {
     setHiddenGameIds(prev => new Set(prev).add(String(gameId)))
   }
 
-  // Simulazione automatica (bottone SIMULA in alto per controllare i risultati live)
+  // Verifica automatica risultati (bottone VERIFICA)
   const simulateBets = async () => {
     const pending = bets.filter(b => b.result === 'pending')
     if (pending.length === 0) return
@@ -514,8 +502,8 @@ export default function Home() {
   const pendingBets = bets.filter(b => b.result === 'pending')
   const wonBets = bets.filter(b => b.result === 'won')
   const lostBets = bets.filter(b => b.result === 'lost')
-  const totalStaked = bets.filter(b => b.betType === 'played').reduce((s, b) => s + b.stake, 0) // Solo soldi reali
-  const totalWon = wonBets.filter(b => b.betType === 'played').reduce((s, b) => s + b.stake * b.quota, 0)
+  const totalStaked = bets.reduce((s, b) => s + b.stake, 0)
+  const totalWon = wonBets.reduce((s, b) => s + b.stake * b.quota, 0)
   const profit = totalWon - totalStaked
   const winRate = (wonBets.length + lostBets.length) > 0 ? ((wonBets.length / (wonBets.length + lostBets.length)) * 100).toFixed(0) : '-'
 
@@ -524,7 +512,7 @@ export default function Home() {
   
   // FILTRO FONDAMENTALE: Nasconde i consigli se:
   // 1) già giocati con GIOCA (qualsiasi risultato)
-  // 2) scommessa già archiviata (won/lost) anche da SIMULA
+  // 2) scommessa già archiviata (won/lost)
   // 3) partita chiaramente FINITA (status Final/FT/AET o fastScore isFinished)
   // 4) partita già nascosta dall'utente (hiddenGameIds persiste nel reset!)
   // Usa String() per evitare bug tipo (number !== string) e fallback su nomi squadre
@@ -550,7 +538,7 @@ export default function Home() {
     const hasBet = bets.some(b => {
       const idMatch = String(b.gameId) === String(rec.game.id)
       const teamMatch = b.sport === rec.game.sport && b.homeTeam === rec.game.homeTeam && b.awayTeam === rec.game.awayTeam
-      return (idMatch || teamMatch) && b.pickType === rec.pickType && (b.betType === 'played' || b.result === 'won' || b.result === 'lost')
+      return (idMatch || teamMatch) && b.pickType === rec.pickType && (b.result === 'won' || b.result === 'lost')
     })
     return !hasBet
   }), [recommendations, hiddenGameIds, bets, fastScores])
@@ -604,7 +592,7 @@ export default function Home() {
               </Button>
               {pendingBets.length > 0 && (
                 <Button size="sm" className="h-7 px-1.5 bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-400 border border-cyan-500/30 font-bold text-[9px] gap-0.5" onClick={simulateBets} disabled={simulating}>
-                  <FlaskConical className={`w-2.5 h-2.5 ${simulating ? 'animate-pulse' : ''}`} /> LIVE CHECK
+                  <FlaskConical className={`w-2.5 h-2.5 ${simulating ? 'animate-pulse' : ''}`} /> VERIFICA
                 </Button>
               )}
               <Button size="sm" className="h-7 px-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/30 font-bold text-[9px] gap-0.5" onClick={() => { fetchGames(); fetchRecs() }} disabled={loading || recLoading}>
@@ -633,7 +621,7 @@ export default function Home() {
           <div className="bg-white/5 rounded-xl p-2.5 text-center"><p className="text-[10px] text-gray-300 font-medium">VINTE</p><p className="text-lg font-black text-emerald-400">{wonBets.length}</p></div>
           <div className="bg-white/5 rounded-xl p-2.5 text-center"><p className="text-[10px] text-gray-300 font-medium">PERSE</p><p className="text-lg font-black text-red-400">{lostBets.length}</p></div>
           <div className="bg-white/5 rounded-xl p-2.5 text-center"><p className="text-[10px] text-gray-300 font-medium">WIN%</p><p className="text-lg font-black text-amber-400">{winRate}%</p></div>
-          <div className="bg-white/5 rounded-xl p-2.5 text-center"><p className="text-[10px] text-gray-300 font-medium">IN GIOCO</p><p className="text-lg font-black text-amber-400">€{pendingBets.filter(b => b.betType==='played').reduce((s, b) => s + b.stake, 0)}</p></div>
+          <div className="bg-white/5 rounded-xl p-2.5 text-center"><p className="text-[10px] text-gray-300 font-medium">IN GIOCO</p><p className="text-lg font-black text-amber-400">€{pendingBets.reduce((s, b) => s + b.stake, 0)}</p></div>
         </div>
       </div>
 
@@ -659,7 +647,7 @@ export default function Home() {
                   <p className="text-[10px] text-gray-300">O/U · ML · Spread</p>
                 </div>
                 {visibleRecommendations.map((rec) => {
-                  const isAlreadySimulated = bets.some(b => b.gameId === rec.game.id && b.pickType === rec.pickType && b.result === 'pending' && b.betType === 'simulated')
+                  const isAlreadyBet = bets.some(b => String(b.gameId) === String(rec.game.id) && b.pickType === rec.pickType && b.result === 'pending')
                   return (
                     <Card key={rec.id} className="bg-white/5 border-white/10 hover:border-emerald-500/30 transition-all">
                       <CardContent className="p-3">
@@ -669,7 +657,7 @@ export default function Home() {
                               <span className="text-base">{rec.game.sportEmoji}</span>
                               <span className="text-[10px] text-gray-300 font-medium">{rec.game.leagueName}</span>
                               {rec.game.isLive && (<span className="px-1.5 py-0.5 bg-red-500/20 text-red-400 text-[9px] font-bold rounded">LIVE</span>)}
-                              {isAlreadySimulated && (<span className="px-1.5 py-0.5 bg-amber-500/20 text-amber-400 text-[9px] font-bold rounded">SIM IN CORSO</span>)}
+                              {isAlreadyBet && (<span className="px-1.5 py-0.5 bg-amber-500/20 text-amber-400 text-[9px] font-bold rounded">IN GIOCO</span>)}
                             </div>
                             <p className="font-bold text-sm text-white truncate">{rec.game.homeTeam} vs {rec.game.awayTeam}</p>
                             {(rec.game.homeScore > 0 || rec.game.awayScore > 0) ? (<p className="text-xs text-gray-300">{rec.game.homeScore}-{rec.game.awayScore} | {rec.game.status}</p>) : (<p className="text-xs text-gray-300">{rec.game.status}</p>)}
@@ -686,8 +674,7 @@ export default function Home() {
                             <p className="text-lg font-black text-emerald-400">€{rec.suggestedStake}</p>
                             <p className="text-[11px] text-gray-300">Guad. +€{rec.potentialWin.toFixed(2)}</p>
                             <div className="flex gap-1 mt-2 justify-end">
-                              <Button size="sm" className="h-7 bg-emerald-500 hover:bg-emerald-600 text-black font-bold text-[11px] px-3" onClick={() => addBet(rec, false)}>GIOCA</Button>
-                              <Button size="sm" className="h-7 bg-amber-500 hover:bg-amber-600 text-black font-bold text-[11px] px-3" onClick={() => addBet(rec, true)}>SIMULA</Button>
+                              <Button size="sm" className="h-7 bg-emerald-500 hover:bg-emerald-600 text-black font-bold text-[11px] px-3" onClick={() => addBet(rec)}>GIOCA</Button>
                               <Button size="sm" className="h-7 w-7 p-0 bg-white/5 hover:bg-red-500/20 text-gray-400 hover:text-red-400" title="Nascondi questo consiglio" onClick={() => dismissRecommendation(rec.game.id)}><EyeOff className="w-3 h-3" /></Button>
                             </div>
                           </div>
@@ -739,7 +726,7 @@ export default function Home() {
                             <div className="flex items-center justify-between">
                               <div className="min-w-0 flex-1">
                                 <p className="text-xs font-bold text-white truncate">
-                                  {b.pick} {b.betType === 'simulated' && <span className="text-amber-400 text-[10px]">(SIM)</span>}
+                                  {b.pick}
                                 </p>
                                 <p className="text-[10px] text-gray-300">Quota {b.quota.toFixed(2)} | €{b.stake} | {new Date(b.date).toLocaleDateString('it-IT')}</p>
                               </div>
@@ -768,7 +755,7 @@ export default function Home() {
                       <Card key={b.id} className={`mb-1.5 ${b.result === 'won' ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-red-500/5 border-red-500/20'}`}>
                         <CardContent className="p-2.5 flex items-center justify-between">
                           <div className="min-w-0 flex-1">
-                            <p className="text-xs font-bold text-white truncate">{b.pick} {b.betType === 'simulated' && <span className="text-amber-400 text-[10px]">(SIM)</span>}</p>
+                            <p className="text-xs font-bold text-white truncate">{b.pick}</p>
                             <p className="text-[10px] text-gray-300">Quota {b.quota.toFixed(2)} | €{b.stake} | {new Date(b.date).toLocaleDateString('it-IT')}</p>
                           </div>
                           <Badge variant={b.result === 'won' ? 'default' : 'destructive'} className="text-[10px]">
