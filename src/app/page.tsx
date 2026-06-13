@@ -484,16 +484,35 @@ export default function Home() {
   const liveGames = games.filter(g => g.isLive)
   const upcomingGames = games.filter(g => !g.isLive)
   
-  // FILTRO FONDAMENTALE: Nasconde i consigli se sono già stati giocati con GIOCA (qualsiasi risultato)
-  // o se c'è una scommessa già archiviata (won/lost) anche da SIMULA (partita finita = non ha più senso)
+  // FILTRO FONDAMENTALE: Nasconde i consigli se:
+  // 1) già giocati con GIOCA (qualsiasi risultato)
+  // 2) scommessa già archiviata (won/lost) anche da SIMULA
+  // 3) partita chiaramente FINITA (status Final/FT/AET o fastScore isFinished)
   // Usa String() per evitare bug tipo (number !== string) e fallback su nomi squadre
-  const visibleRecommendations = recommendations.filter(rec => 
-    !bets.some(b => {
+  const isGameFinished = (rec: Recommendation): boolean => {
+    // Controlla lo status del gioco stesso
+    const status = rec.game.status?.toLowerCase() || ''
+    if (status.includes('final') || status.includes('ft') || status.includes('aet') || status.includes('pen') || status.includes('finished') || status.includes('postponed') || status.includes('cancel') || status.includes('awd')) return true
+    // Controlla nei fastScores se la partita è finita
+    const fastMatch = fastScores.find(fs => {
+      if (fs.sport !== rec.game.sport) return false
+      return (fs.homeTeam.toLowerCase().includes(rec.game.homeTeam.toLowerCase()) || rec.game.homeTeam.toLowerCase().includes(fs.homeTeam.toLowerCase())) && (fs.awayTeam.toLowerCase().includes(rec.game.awayTeam.toLowerCase()) || rec.game.awayTeam.toLowerCase().includes(fs.awayTeam.toLowerCase()))
+    })
+    if (fastMatch && fastMatch.isFinished) return true
+    return false
+  }
+
+  const visibleRecommendations = recommendations.filter(rec => {
+    // Partita finita = non mostrare mai
+    if (isGameFinished(rec)) return false
+    // Già giocata con GIOCA o archiviata
+    const hasBet = bets.some(b => {
       const idMatch = String(b.gameId) === String(rec.game.id)
       const teamMatch = b.sport === rec.game.sport && b.homeTeam === rec.game.homeTeam && b.awayTeam === rec.game.awayTeam
       return (idMatch || teamMatch) && b.pickType === rec.pickType && (b.betType === 'played' || b.result === 'won' || b.result === 'lost')
     })
-  )
+    return !hasBet
+  })
 
   if (!mounted) {
     return (
