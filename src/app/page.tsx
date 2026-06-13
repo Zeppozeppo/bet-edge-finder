@@ -475,9 +475,9 @@ export default function Home() {
   const liveGames = games.filter(g => g.isLive)
   const upcomingGames = games.filter(g => !g.isLive)
   
-  // FILTRO FONDAMENTALE: Nasconde i consigli se sono già stati giocati con GIOCA
+  // FILTRO FONDAMENTALE: Nasconde i consigli se sono già stati giocati con GIOCA (pending, won o lost)
   const visibleRecommendations = recommendations.filter(rec => 
-    !bets.some(b => b.gameId === rec.game.id && b.pickType === rec.pickType && b.result === 'pending' && b.betType === 'played')
+    !bets.some(b => b.gameId === rec.game.id && b.pickType === rec.pickType && b.betType === 'played')
   )
 
   if (!mounted) {
